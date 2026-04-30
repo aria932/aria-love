@@ -1,8 +1,6 @@
 export const config = { runtime: "edge" };
 
 const ORIGIN_ROOT = (process.env.ORIGIN_ENDPOINT || "").replace(/\/$/, "");
-const REQ_HOST = process.env.REQ_HOST || "";
-const BASE_PATH = (process.env.BASE_PATH || "").replace(/\/$/, "");
 
 const FILTERED_HEADER_KEYS = new Set([
   "host",
@@ -20,7 +18,7 @@ const FILTERED_HEADER_KEYS = new Set([
   "x-forwarded-port",
 ]);
 
-export default async function edgeRelay(req) {
+export default async function edgeRelay(ctxReq) {
   if (!ORIGIN_ROOT) {
     return new Response("Misconfigured: ORIGIN_ENDPOINT is not set", {
       status: 500,
@@ -28,15 +26,17 @@ export default async function edgeRelay(req) {
   }
 
   try {
-    const url = new URL(req.url);
-    const incomingPath = url.pathname + url.search;
+    const pathIdx = ctxReq.url.indexOf("/", 8);
 
-    const finalUrl = `${ORIGIN_ROOT}${BASE_PATH}${incomingPath}`;
+    const finalUrl =
+      pathIdx === -1
+        ? `${ORIGIN_ROOT}/`
+        : `${ORIGIN_ROOT}${ctxReq.url.slice(pathIdx)}`;
 
-    const headers = new Headers();
-    let clientIp = null;
+    const hdrBucket = new Headers();
+    let clientChainIp = null;
 
-    for (const [key, val] of req.headers) {
+    for (const [key, val] of ctxReq.headers) {
       if (
         FILTERED_HEADER_KEYS.has(key) ||
         key.startsWith("x-vercel-")
@@ -45,41 +45,36 @@ export default async function edgeRelay(req) {
       }
 
       if (key === "x-real-ip") {
-        clientIp = val;
+        clientChainIp = val;
         continue;
       }
 
       if (key === "x-forwarded-for") {
-        if (!clientIp) clientIp = val;
+        if (!clientChainIp) clientChainIp = val;
         continue;
       }
 
-      headers.set(key, val);
+      hdrBucket.set(key, val);
     }
 
-    if (clientIp) {
-      headers.set("x-forwarded-for", clientIp);
+    if (clientChainIp) {
+      hdrBucket.set("x-forwarded-for", clientChainIp);
     }
 
-    if (REQ_HOST) {
-      headers.set("host", REQ_HOST);
-      headers.set("origin", `https://${REQ_HOST}`);
-    }
+    const verb = ctxReq.method;
+    const attachBody = verb !== "GET" && verb !== "HEAD";
 
-    const method = req.method;
-    const hasBody = method !== "GET" && method !== "HEAD";
-
-    const response = await fetch(finalUrl, {
-      method,
-      headers,
-      body: hasBody ? req.body : undefined,
+    const res = await fetch(finalUrl, {
+      method: verb,
+      headers: hdrBucket,
+      body: attachBody ? ctxReq.body : undefined,
       duplex: "half",
       redirect: "manual",
     });
 
-    return response;
-  } catch (err) {
-    console.error("relay error:", err);
+    return res;
+  } catch (e) {
+    console.error("relay error:", e);
 
     return new Response("Bad Gateway: Tunnel Failed", {
       status: 502,
