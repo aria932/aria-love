@@ -1,0 +1,7 @@
+{
+  "name": "neon-orchid-47",
+  "version": "2.0.0",
+  "description": "flux-driven modular echo layer for async pipelines",
+  "private": true,
+  "license": "MIT"
+}
